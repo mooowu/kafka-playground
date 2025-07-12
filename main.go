@@ -8,10 +8,13 @@ import (
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/ec2"
 	"github.com/pulumi/pulumi-aws/sdk/v6/go/aws/route53"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
+	"github.com/pulumi/pulumi/sdk/v3/go/pulumi/config"
 )
 
 func main() {
 	pulumi.Run(func(ctx *pulumi.Context) error {
+		cfg := config.New(ctx, "")
+		keyName := cfg.Require("keyName")
 
 		vpc, err := ec2.NewVpc(ctx, "kafka-playground-vpc", &ec2.VpcArgs{
 			CidrBlock:          pulumi.String("10.0.0.0/16"),
@@ -156,6 +159,45 @@ func main() {
 			return err
 		}
 
+		bastionSg, err := ec2.NewSecurityGroup(ctx, "kafka-playground-bastion-sg", &ec2.SecurityGroupArgs{
+			VpcId:       vpc.ID(),
+			Description: pulumi.String("Allow SSH to bastion host"),
+			Tags: pulumi.StringMap{
+				"Name": pulumi.String("kafka-playground-bastion-sg"),
+			},
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "bastion-ingress-ssh", &ec2.SecurityGroupRuleArgs{
+			Type:            pulumi.String("ingress"),
+			FromPort:        pulumi.Int(22),
+			ToPort:          pulumi.Int(22),
+			Protocol:        pulumi.String("tcp"),
+			CidrBlocks:      pulumi.StringArray{pulumi.String("0.0.0.0/0")},
+			SecurityGroupId: bastionSg.ID(),
+			Description:     pulumi.String("Allow SSH from Internet"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "bastion-egress-all", &ec2.SecurityGroupRuleArgs{
+			Type:     pulumi.String("egress"),
+			FromPort: pulumi.Int(0),
+			ToPort:   pulumi.Int(0),
+			Protocol: pulumi.String("-1"),
+			CidrBlocks: pulumi.StringArray{
+				pulumi.String("0.0.0.0/0"),
+			},
+			SecurityGroupId: bastionSg.ID(),
+			Description:     pulumi.String("Allow all outbound traffic from bastion"),
+		})
+		if err != nil {
+			return err
+		}
+
 		kafkaSg, err := ec2.NewSecurityGroup(ctx, "kafka-playground-sg", &ec2.SecurityGroupArgs{
 			VpcId:       vpc.ID(),
 			Description: pulumi.String("Allow Kafka traffic"),
@@ -188,6 +230,19 @@ func main() {
 			SourceSecurityGroupId: kafkaSg.ID(),
 			SecurityGroupId:       kafkaSg.ID(),
 			Description:           pulumi.String("Allow internal KRaft communication"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-ingress-ssh-from-bastion", &ec2.SecurityGroupRuleArgs{
+			Type:                  pulumi.String("ingress"),
+			FromPort:              pulumi.Int(22),
+			ToPort:                pulumi.Int(22),
+			Protocol:              pulumi.String("tcp"),
+			SourceSecurityGroupId: bastionSg.ID(),
+			SecurityGroupId:       kafkaSg.ID(),
+			Description:           pulumi.String("Allow SSH from bastion to Kafka instances"),
 		})
 		if err != nil {
 			return err
@@ -275,7 +330,29 @@ bin/kafka-server-start.sh -daemon config/kraft/server.properties
 			}
 		}
 
+		bastion, err := ec2.NewInstance(ctx, "kafka-playground-bastion", &ec2.InstanceArgs{
+			InstanceType: pulumi.String("t2.micro"),
+			Ami:          pulumi.String(ami.Id),
+			SubnetId:     publicSubnets[0].ID(),
+			VpcSecurityGroupIds: pulumi.StringArray{
+				bastionSg.ID(),
+			},
+			KeyName: pulumi.String(keyName),
+			UserData: pulumi.String(`#!/bin/bash
+sudo yum update -y
+sudo amazon-linux-extras install epel -y
+sudo yum install -y kafkacat
+`),
+			Tags: pulumi.StringMap{
+				"Name": pulumi.String("kafka-playground-bastion"),
+			},
+		})
+		if err != nil {
+			return err
+		}
+
 		ctx.Export("broker_endpoints", brokerEndpoints)
+		ctx.Export("bastion_public_ip", bastion.PublicIp)
 
 		return nil
 	})

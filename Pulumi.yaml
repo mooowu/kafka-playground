@@ -1,3 +1,7 @@
 name: kafka-playground
+description: A minimal AWS Go Pulumi program
 runtime: go
-description: A Pulumi program to create a 7-node Kafka cluster in KRaft mode
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: aws-go

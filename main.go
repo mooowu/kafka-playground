@@ -278,7 +278,7 @@ func main() {
 
 		var brokerEndpoints pulumi.StringArray
 		var controllerVoters []string
-		for i := 0; i < 7; i++ {
+		for i := 0; i < 3; i++ {
 			instanceName := fmt.Sprintf("kafka-playground-instance-%d", i)
 			domainName := fmt.Sprintf("%s.kafka.internal", instanceName)
 			controllerVoters = append(controllerVoters, fmt.Sprintf("%d@%s:9093", i, domainName))
@@ -286,26 +286,55 @@ func main() {
 		}
 		controllerVotersString := strings.Join(controllerVoters, ",")
 
-		for i := 0; i < 7; i++ {
+		for i := 0; i < 3; i++ {
 			instance, err := ec2.NewInstance(ctx, fmt.Sprintf("kafka-playground-instance-%d", i), &ec2.InstanceArgs{
-				InstanceType: pulumi.String("t3.micro"),
+				InstanceType: pulumi.String("t3.medium"),
 				Ami:          pulumi.String(ami.Id),
 				SubnetId:     privateSubnets[i%len(privateSubnets)].ID(),
 				VpcSecurityGroupIds: pulumi.StringArray{
 					kafkaSg.ID(),
 				},
+				KeyName: pulumi.String(keyName),
 				UserData: pulumi.String(fmt.Sprintf(`#!/bin/bash
 sudo yum update -y
 sudo yum install -y java-11-amazon-corretto
 wget https://downloads.apache.org/kafka/3.9.1/kafka_2.13-3.9.1.tgz
 tar -xzf kafka_2.13-3.9.1.tgz
 cd kafka_2.13-3.9.1
-CLUSTER_ID=$(bin/kafka-storage.sh random-uuid)
-bin/kafka-storage.sh format -t $CLUSTER_ID -c config/kraft/server.properties
-sed -i 's/broker.id=0/broker.id=%d/' config/kraft/server.properties
-sed -i 's|controller.quorum.voters=.*|controller.quorum.voters=%s|' config/kraft/server.properties
+
+CLUSTER_ID="kafka-playground-cluster-id-12345"
+
+cp config/kraft/server.properties config/kraft/server.properties.backup
+cat > config/kraft/server.properties << EOF
+process.roles=broker,controller
+node.id=%d
+controller.quorum.voters=%s
+listeners=PLAINTEXT://:9092,CONTROLLER://:9093
+advertised.listeners=PLAINTEXT://kafka-playground-instance-%d.kafka.internal:9092
+controller.listener.names=CONTROLLER
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+log.dirs=/tmp/kraft-combined-logs
+num.partitions=3
+num.recovery.threads.per.data.dir=1
+offsets.topic.replication.factor=3
+transaction.state.log.replication.factor=3
+transaction.state.log.min.isr=2
+log.retention.hours=168
+log.segment.bytes=1073741824
+log.retention.check.interval.ms=300000
+auto.create.topics.enable=true
+group.initial.rebalance.delay.ms=0
+EOF
+
+bin/kafka-storage.sh format -t $CLUSTER_ID -c config/kraft/server.properties --ignore-formatted
+
 bin/kafka-server-start.sh -daemon config/kraft/server.properties
-`, i, controllerVotersString)),
+`, i, controllerVotersString, i)),
 				Tags: pulumi.StringMap{
 					"Name": pulumi.String(fmt.Sprintf("kafka-playground-instance-%d", i)),
 				},

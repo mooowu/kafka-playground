@@ -32,8 +32,6 @@ func main() {
 			return err
 		}
 
-		var publicSubnetIds pulumi.StringArrayOutput
-		var privateSubnetIds pulumi.StringArrayOutput
 		var publicSubnets []*ec2.Subnet
 		var privateSubnets []*ec2.Subnet
 
@@ -78,9 +76,6 @@ func main() {
 				return err
 			}
 			publicSubnets = append(publicSubnets, publicSubnet)
-			publicSubnetIds = publicSubnetIds.ApplyT(func(ids []string) []string {
-				return append(ids, publicSubnet.ID().ToStringOutput().ApplyT(func(id string) string { return id }).(string))
-			}).(pulumi.StringArrayOutput)
 
 			_, err = ec2.NewRouteTableAssociation(ctx, fmt.Sprintf("kafka-playground-public-rta-%s", azName), &ec2.RouteTableAssociationArgs{
 				SubnetId:     publicSubnet.ID(),
@@ -102,9 +97,6 @@ func main() {
 				return err
 			}
 			privateSubnets = append(privateSubnets, privateSubnet)
-			privateSubnetIds = privateSubnetIds.ApplyT(func(ids []string) []string {
-				return append(ids, privateSubnet.ID().ToStringOutput().ApplyT(func(id string) string { return id }).(string))
-			}).(pulumi.StringArrayOutput)
 		}
 
 		eip, err := ec2.NewEip(ctx, "kafka-playground-nat-eip", &ec2.EipArgs{
@@ -212,7 +204,7 @@ func main() {
 			return err
 		}
 
-		var brokerEndpoints []pulumi.StringOutput
+		var brokerEndpoints pulumi.StringArray
 		var controllerVoters []string
 		for i := 0; i < 7; i++ {
 			instanceName := fmt.Sprintf("kafka-playground-instance-%d", i)
@@ -266,13 +258,7 @@ bin/kafka-server-start.sh -daemon config/kraft/server.properties
 			}
 		}
 
-		ctx.Export("broker_endpoints", pulumi.All(brokerEndpoints).ApplyT(func(endpoints []interface{}) string {
-			var s []string
-			for _, v := range endpoints {
-				s = append(s, v.(string))
-			}
-			return strings.Join(s, ",")
-		}))
+		ctx.Export("broker_endpoints", brokerEndpoints)
 
 		return nil
 	})

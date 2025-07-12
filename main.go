@@ -233,7 +233,7 @@ func main() {
 
 		for i := 0; i < 7; i++ {
 			instance, err := ec2.NewInstance(ctx, fmt.Sprintf("kafka-playground-instance-%d", i), &ec2.InstanceArgs{
-				InstanceType: pulumi.String("t2.micro"),
+				InstanceType: pulumi.String("t2.medium"),
 				Ami:          pulumi.String(ami.Id),
 				SubnetId:     privateSubnets[i%len(privateSubnets)].ID(),
 				VpcSecurityGroupIds: pulumi.StringArray{

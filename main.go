@@ -369,8 +369,9 @@ bin/kafka-server-start.sh -daemon config/kraft/server.properties
 			KeyName: pulumi.String(keyName),
 			UserData: pulumi.String(`#!/bin/bash
 sudo yum update -y
-sudo amazon-linux-extras install epel -y
-sudo yum install -y kafkacat
+sudo yum install -y java-11-amazon-corretto
+wget https://downloads.apache.org/kafka/3.9.1/kafka_2.13-3.9.1.tgz
+tar -xzf kafka_2.13-3.9.1.tgz
 `),
 			Tags: pulumi.StringMap{
 				"Name": pulumi.String("kafka-playground-bastion"),

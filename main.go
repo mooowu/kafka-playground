@@ -159,31 +159,48 @@ func main() {
 		kafkaSg, err := ec2.NewSecurityGroup(ctx, "kafka-playground-sg", &ec2.SecurityGroupArgs{
 			VpcId:       vpc.ID(),
 			Description: pulumi.String("Allow Kafka traffic"),
-			Ingress: ec2.SecurityGroupIngressArray{
-				&ec2.SecurityGroupIngressArgs{
-					Protocol:   pulumi.String("tcp"),
-					FromPort:   pulumi.Int(9092),
-					ToPort:     pulumi.Int(9092),
-					CidrBlocks: pulumi.StringArray{vpc.CidrBlock},
-				},
-				&ec2.SecurityGroupIngressArgs{
-					Protocol: pulumi.String("tcp"),
-					FromPort: pulumi.Int(9093),
-					ToPort:   pulumi.Int(9093),
-					Self:     pulumi.Bool(true),
-				},
-			},
-			Egress: ec2.SecurityGroupEgressArray{
-				&ec2.SecurityGroupEgressArgs{
-					Protocol:   pulumi.String("-1"),
-					FromPort:   pulumi.Int(0),
-					ToPort:     pulumi.Int(0),
-					CidrBlocks: pulumi.StringArray{pulumi.String("0.0.0.0/0")},
-				},
-			},
 			Tags: pulumi.StringMap{
 				"Name": pulumi.String("kafka-playground-sg"),
 			},
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-ingress-clients", &ec2.SecurityGroupRuleArgs{
+			Type:            pulumi.String("ingress"),
+			FromPort:        pulumi.Int(9092),
+			ToPort:          pulumi.Int(9092),
+			Protocol:        pulumi.String("tcp"),
+			CidrBlocks:      pulumi.StringArray{vpc.CidrBlock},
+			SecurityGroupId: kafkaSg.ID(),
+			Description:     pulumi.String("Allow Kafka clients from within the VPC"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-ingress-kraft", &ec2.SecurityGroupRuleArgs{
+			Type:                  pulumi.String("ingress"),
+			FromPort:              pulumi.Int(9093),
+			ToPort:                pulumi.Int(9093),
+			Protocol:              pulumi.String("tcp"),
+			SourceSecurityGroupId: kafkaSg.ID(),
+			SecurityGroupId:       kafkaSg.ID(),
+			Description:           pulumi.String("Allow internal KRaft communication"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-egress-all", &ec2.SecurityGroupRuleArgs{
+			Type:            pulumi.String("egress"),
+			FromPort:        pulumi.Int(0),
+			ToPort:          pulumi.Int(0),
+			Protocol:        pulumi.String("-1"),
+			CidrBlocks:      pulumi.StringArray{pulumi.String("0.0.0.0/0")},
+			SecurityGroupId: kafkaSg.ID(),
+			Description:     pulumi.String("Allow all outbound traffic"),
 		})
 		if err != nil {
 			return err

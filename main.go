@@ -298,14 +298,27 @@ func main() {
 				UserData: pulumi.String(fmt.Sprintf(`#!/bin/bash
 sudo yum update -y
 sudo yum install -y java-11-amazon-corretto
-wget https://downloads.apache.org/kafka/3.9.1/kafka_2.13-3.9.1.tgz
-tar -xzf kafka_2.13-3.9.1.tgz
-cd kafka_2.13-3.9.1
+
+# Create kafka user
+sudo useradd -r -m -s /bin/bash kafka
+
+# Install Kafka
+sudo wget https://downloads.apache.org/kafka/3.9.1/kafka_2.13-3.9.1.tgz -O /tmp/kafka_2.13-3.9.1.tgz
+sudo tar -xzf /tmp/kafka_2.13-3.9.1.tgz -C /opt/
+sudo mv /opt/kafka_2.13-3.9.1 /opt/kafka
+sudo chown -R kafka:kafka /opt/kafka
+
+# Create log directory
+sudo mkdir -p /var/log/kafka
+sudo mkdir -p /opt/kafka/logs
+sudo chown -R kafka:kafka /var/log/kafka
+sudo chown -R kafka:kafka /opt/kafka/logs
 
 CLUSTER_ID="kafka-playground-cluster-id-12345"
 
-cp config/kraft/server.properties config/kraft/server.properties.backup
-cat > config/kraft/server.properties << EOF
+# Create Kafka configuration
+sudo cp /opt/kafka/config/kraft/server.properties /opt/kafka/config/kraft/server.properties.backup
+sudo cat > /opt/kafka/config/kraft/server.properties << 'EOF'
 process.roles=broker,controller
 node.id=%d
 controller.quorum.voters=%s
@@ -318,7 +331,7 @@ num.io.threads=8
 socket.send.buffer.bytes=102400
 socket.receive.buffer.bytes=102400
 socket.request.max.bytes=104857600
-log.dirs=/tmp/kraft-combined-logs
+log.dirs=/opt/kafka/logs
 num.partitions=3
 num.recovery.threads.per.data.dir=1
 offsets.topic.replication.factor=3
@@ -331,9 +344,47 @@ auto.create.topics.enable=true
 group.initial.rebalance.delay.ms=0
 EOF
 
-bin/kafka-storage.sh format -t $CLUSTER_ID -c config/kraft/server.properties --ignore-formatted
+# Set ownership of config file
+sudo chown kafka:kafka /opt/kafka/config/kraft/server.properties
 
-bin/kafka-server-start.sh -daemon config/kraft/server.properties
+# Format storage
+sudo -u kafka /opt/kafka/bin/kafka-storage.sh format -t $CLUSTER_ID -c /opt/kafka/config/kraft/server.properties --ignore-formatted
+
+# Create systemd service file
+sudo cat > /etc/systemd/system/kafka.service << 'EOF'
+[Unit]
+Description=Apache Kafka Service
+Documentation=https://kafka.apache.org/documentation/
+After=network.target
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kafka
+KillMode=process
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start kafka service
+sudo systemctl daemon-reload
+sudo systemctl enable kafka
+sudo systemctl start kafka
+
+# Wait for service to start
+sleep 30
+sudo systemctl status kafka
 `, i, controllerVotersString, i)),
 				Tags: pulumi.StringMap{
 					"Name": pulumi.String(fmt.Sprintf("kafka-playground-instance-%d", i)),

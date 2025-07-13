@@ -198,64 +198,118 @@ func main() {
 			return err
 		}
 
-		kafkaSg, err := ec2.NewSecurityGroup(ctx, "kafka-playground-sg", &ec2.SecurityGroupArgs{
+		controllerSg, err := ec2.NewSecurityGroup(ctx, "kafka-playground-controller-sg", &ec2.SecurityGroupArgs{
 			VpcId:       vpc.ID(),
-			Description: pulumi.String("Allow Kafka traffic"),
+			Description: pulumi.String("Allow Kafka controller traffic"),
 			Tags: pulumi.StringMap{
-				"Name": pulumi.String("kafka-playground-sg"),
+				"Name": pulumi.String("kafka-playground-controller-sg"),
 			},
 		})
 		if err != nil {
 			return err
 		}
 
-		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-ingress-clients", &ec2.SecurityGroupRuleArgs{
-			Type:            pulumi.String("ingress"),
-			FromPort:        pulumi.Int(9092),
-			ToPort:          pulumi.Int(9092),
-			Protocol:        pulumi.String("tcp"),
-			CidrBlocks:      pulumi.StringArray{vpc.CidrBlock},
-			SecurityGroupId: kafkaSg.ID(),
-			Description:     pulumi.String("Allow Kafka clients from within the VPC"),
-		})
-		if err != nil {
-			return err
-		}
-
-		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-ingress-kraft", &ec2.SecurityGroupRuleArgs{
+		_, err = ec2.NewSecurityGroupRule(ctx, "controller-ingress-kraft", &ec2.SecurityGroupRuleArgs{
 			Type:                  pulumi.String("ingress"),
 			FromPort:              pulumi.Int(9093),
 			ToPort:                pulumi.Int(9093),
 			Protocol:              pulumi.String("tcp"),
-			SourceSecurityGroupId: kafkaSg.ID(),
-			SecurityGroupId:       kafkaSg.ID(),
+			SourceSecurityGroupId: controllerSg.ID(),
+			SecurityGroupId:       controllerSg.ID(),
 			Description:           pulumi.String("Allow internal KRaft communication"),
 		})
 		if err != nil {
 			return err
 		}
 
-		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-ingress-ssh-from-bastion", &ec2.SecurityGroupRuleArgs{
+		_, err = ec2.NewSecurityGroupRule(ctx, "controller-ingress-ssh-from-bastion", &ec2.SecurityGroupRuleArgs{
 			Type:                  pulumi.String("ingress"),
 			FromPort:              pulumi.Int(22),
 			ToPort:                pulumi.Int(22),
 			Protocol:              pulumi.String("tcp"),
 			SourceSecurityGroupId: bastionSg.ID(),
-			SecurityGroupId:       kafkaSg.ID(),
-			Description:           pulumi.String("Allow SSH from bastion to Kafka instances"),
+			SecurityGroupId:       controllerSg.ID(),
+			Description:           pulumi.String("Allow SSH from bastion to Kafka controllers"),
 		})
 		if err != nil {
 			return err
 		}
 
-		_, err = ec2.NewSecurityGroupRule(ctx, "kafka-egress-all", &ec2.SecurityGroupRuleArgs{
-			Type:            pulumi.String("egress"),
-			FromPort:        pulumi.Int(0),
-			ToPort:          pulumi.Int(0),
-			Protocol:        pulumi.String("-1"),
-			CidrBlocks:      pulumi.StringArray{pulumi.String("0.0.0.0/0")},
-			SecurityGroupId: kafkaSg.ID(),
+		_, err = ec2.NewSecurityGroupRule(ctx, "controller-egress-all", &ec2.SecurityGroupRuleArgs{
+			Type:     pulumi.String("egress"),
+			FromPort: pulumi.Int(0),
+			ToPort:   pulumi.Int(0),
+			Protocol: pulumi.String("-1"),
+			CidrBlocks: pulumi.StringArray{
+				pulumi.String("0.0.0.0/0"),
+			},
+			SecurityGroupId: controllerSg.ID(),
 			Description:     pulumi.String("Allow all outbound traffic"),
+		})
+		if err != nil {
+			return err
+		}
+
+		brokerSg, err := ec2.NewSecurityGroup(ctx, "kafka-playground-broker-sg", &ec2.SecurityGroupArgs{
+			VpcId:       vpc.ID(),
+			Description: pulumi.String("Allow Kafka broker traffic"),
+			Tags: pulumi.StringMap{
+				"Name": pulumi.String("kafka-playground-broker-sg"),
+			},
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "broker-ingress-clients", &ec2.SecurityGroupRuleArgs{
+			Type:            pulumi.String("ingress"),
+			FromPort:        pulumi.Int(9092),
+			ToPort:          pulumi.Int(9092),
+			Protocol:        pulumi.String("tcp"),
+			CidrBlocks:      pulumi.StringArray{vpc.CidrBlock},
+			SecurityGroupId: brokerSg.ID(),
+			Description:     pulumi.String("Allow Kafka clients from within the VPC"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "broker-ingress-ssh-from-bastion", &ec2.SecurityGroupRuleArgs{
+			Type:                  pulumi.String("ingress"),
+			FromPort:              pulumi.Int(22),
+			ToPort:                pulumi.Int(22),
+			Protocol:              pulumi.String("tcp"),
+			SourceSecurityGroupId: bastionSg.ID(),
+			SecurityGroupId:       brokerSg.ID(),
+			Description:           pulumi.String("Allow SSH from bastion to Kafka brokers"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "broker-egress-all", &ec2.SecurityGroupRuleArgs{
+			Type:     pulumi.String("egress"),
+			FromPort: pulumi.Int(0),
+			ToPort:   pulumi.Int(0),
+			Protocol: pulumi.String("-1"),
+			CidrBlocks: pulumi.StringArray{
+				pulumi.String("0.0.0.0/0"),
+			},
+			SecurityGroupId: brokerSg.ID(),
+			Description:     pulumi.String("Allow all outbound traffic"),
+		})
+		if err != nil {
+			return err
+		}
+
+		_, err = ec2.NewSecurityGroupRule(ctx, "controller-ingress-from-brokers", &ec2.SecurityGroupRuleArgs{
+			Type:                  pulumi.String("ingress"),
+			FromPort:              pulumi.Int(9093),
+			ToPort:                pulumi.Int(9093),
+			Protocol:              pulumi.String("tcp"),
+			SourceSecurityGroupId: brokerSg.ID(),
+			SecurityGroupId:       controllerSg.ID(),
+			Description:           pulumi.String("Allow brokers to connect to controllers"),
 		})
 		if err != nil {
 			return err
@@ -276,54 +330,142 @@ func main() {
 			return err
 		}
 
-		var brokerEndpoints pulumi.StringArray
 		var controllerVoters []string
 		for i := 0; i < 3; i++ {
-			instanceName := fmt.Sprintf("kafka-playground-instance-%d", i)
-			domainName := fmt.Sprintf("%s.kafka.internal", instanceName)
-			controllerVoters = append(controllerVoters, fmt.Sprintf("%d@%s:9093", i, domainName))
-			brokerEndpoints = append(brokerEndpoints, pulumi.Sprintf("%s:9092", domainName))
+			controllerName := fmt.Sprintf("kafka-playground-controller-%d", i)
+			controllerDomain := fmt.Sprintf("%s.kafka.internal", controllerName)
+			controllerVoters = append(controllerVoters, fmt.Sprintf("%d@%s:9093", i, controllerDomain))
 		}
 		controllerVotersString := strings.Join(controllerVoters, ",")
 
 		for i := 0; i < 3; i++ {
-			instance, err := ec2.NewInstance(ctx, fmt.Sprintf("kafka-playground-instance-%d", i), &ec2.InstanceArgs{
-				InstanceType: pulumi.String("t3.medium"),
+			nodeID := i
+			instanceName := fmt.Sprintf("kafka-playground-controller-%d", i)
+			instance, err := ec2.NewInstance(ctx, instanceName, &ec2.InstanceArgs{
+				InstanceType: pulumi.String("t3.small"),
 				Ami:          pulumi.String(ami.Id),
 				SubnetId:     privateSubnets[i%len(privateSubnets)].ID(),
 				VpcSecurityGroupIds: pulumi.StringArray{
-					kafkaSg.ID(),
+					controllerSg.ID(),
 				},
 				KeyName: pulumi.String(keyName),
 				UserData: pulumi.String(fmt.Sprintf(`#!/bin/bash
 sudo yum update -y
 sudo yum install -y java-11-amazon-corretto
-
-# Create kafka user
 sudo useradd -r -m -s /bin/bash kafka
-
-# Install Kafka
 sudo wget https://downloads.apache.org/kafka/3.9.1/kafka_2.13-3.9.1.tgz -O /tmp/kafka_2.13-3.9.1.tgz
 sudo tar -xzf /tmp/kafka_2.13-3.9.1.tgz -C /opt/
 sudo mv /opt/kafka_2.13-3.9.1 /opt/kafka
 sudo chown -R kafka:kafka /opt/kafka
-
-# Create log directory
 sudo mkdir -p /var/log/kafka
 sudo mkdir -p /opt/kafka/logs
 sudo chown -R kafka:kafka /var/log/kafka
 sudo chown -R kafka:kafka /opt/kafka/logs
-
 CLUSTER_ID="kafka-playground-cluster-id-12345"
-
-# Create Kafka configuration
-sudo cp /opt/kafka/config/kraft/server.properties /opt/kafka/config/kraft/server.properties.backup
-sudo cat > /opt/kafka/config/kraft/server.properties << 'EOF'
-process.roles=broker,controller
+sudo cp /opt/kafka/config/kraft/controller.properties /opt/kafka/config/kraft/controller.properties.backup
+sudo bash -c "cat > /opt/kafka/config/kraft/controller.properties << EOF
+process.roles=controller
 node.id=%d
 controller.quorum.voters=%s
-listeners=PLAINTEXT://:9092,CONTROLLER://:9093
-advertised.listeners=PLAINTEXT://kafka-playground-instance-%d.kafka.internal:9092
+listeners=CONTROLLER://:9093
+controller.listener.names=CONTROLLER
+listener.security.protocol.map=CONTROLLER:PLAINTEXT
+log.dirs=/opt/kafka/logs
+num.network.threads=3
+num.io.threads=8
+socket.send.buffer.bytes=102400
+socket.receive.buffer.bytes=102400
+socket.request.max.bytes=104857600
+EOF"
+sudo chown kafka:kafka /opt/kafka/config/kraft/controller.properties
+sudo -u kafka /opt/kafka/bin/kafka-storage.sh format -t $CLUSTER_ID -c /opt/kafka/config/kraft/controller.properties --ignore-formatted
+sudo cat > /etc/systemd/system/kafka.service << 'EOF'
+[Unit]
+Description=Apache Kafka Controller Service
+After=network.target
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=kafka
+Group=kafka
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/controller.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kafka-controller
+KillMode=process
+TimeoutStopSec=30
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable kafka
+sudo systemctl start kafka
+sleep 30
+sudo systemctl status kafka
+`, nodeID, controllerVotersString)),
+				Tags: pulumi.StringMap{
+					"Name": pulumi.String(instanceName),
+				},
+			})
+			if err != nil {
+				return err
+			}
+
+			_, err = route53.NewRecord(ctx, fmt.Sprintf("kafka-playground-controller-record-%d", i), &route53.RecordArgs{
+				ZoneId: hostedZone.ID(),
+				Name: instance.Tags.ApplyT(func(tags map[string]string) (string, error) {
+					return fmt.Sprintf("%s.kafka.internal", tags["Name"]), nil
+				}).(pulumi.StringOutput),
+				Type: pulumi.String("A"),
+				Ttl:  pulumi.Int(300),
+				Records: pulumi.StringArray{
+					instance.PrivateIp,
+				},
+			})
+			if err != nil {
+				return err
+			}
+		}
+
+		var brokerEndpoints pulumi.StringArray
+		for i := 0; i < 3; i++ {
+			nodeID := i + 1000
+			instanceName := fmt.Sprintf("kafka-playground-broker-%d", i)
+			advertisedListener := fmt.Sprintf("%s.kafka.internal:9092", instanceName)
+			brokerEndpoints = append(brokerEndpoints, pulumi.String(advertisedListener))
+
+			instance, err := ec2.NewInstance(ctx, instanceName, &ec2.InstanceArgs{
+				InstanceType: pulumi.String("t3.medium"),
+				Ami:          pulumi.String(ami.Id),
+				SubnetId:     privateSubnets[i%len(privateSubnets)].ID(),
+				VpcSecurityGroupIds: pulumi.StringArray{
+					brokerSg.ID(),
+				},
+				KeyName: pulumi.String(keyName),
+				UserData: pulumi.String(fmt.Sprintf(`#!/bin/bash
+sudo yum update -y
+sudo yum install -y java-11-amazon-corretto
+sudo useradd -r -m -s /bin/bash kafka
+sudo wget https://downloads.apache.org/kafka/3.9.1/kafka_2.13-3.9.1.tgz -O /tmp/kafka_2.13-3.9.1.tgz
+sudo tar -xzf /tmp/kafka_2.13-3.9.1.tgz -C /opt/
+sudo mv /opt/kafka_2.13-3.9.1 /opt/kafka
+sudo chown -R kafka:kafka /opt/kafka
+sudo mkdir -p /var/log/kafka
+sudo mkdir -p /opt/kafka/logs
+sudo chown -R kafka:kafka /var/log/kafka
+sudo chown -R kafka:kafka /opt/kafka/logs
+CLUSTER_ID="kafka-playground-cluster-id-12345"
+sudo cp /opt/kafka/config/kraft/broker.properties /opt/kafka/config/kraft/broker.properties.backup
+sudo bash -c "cat > /opt/kafka/config/kraft/broker.properties << EOF
+process.roles=broker
+node.id=%d
+controller.quorum.voters=%s
+listeners=PLAINTEXT://:9092
+advertised.listeners=PLAINTEXT://%s
 controller.listener.names=CONTROLLER
 listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
 num.network.threads=3
@@ -342,59 +484,46 @@ log.segment.bytes=1073741824
 log.retention.check.interval.ms=300000
 auto.create.topics.enable=true
 group.initial.rebalance.delay.ms=0
-EOF
-
-# Set ownership of config file
-sudo chown kafka:kafka /opt/kafka/config/kraft/server.properties
-
-# Format storage
-sudo -u kafka /opt/kafka/bin/kafka-storage.sh format -t $CLUSTER_ID -c /opt/kafka/config/kraft/server.properties --ignore-formatted
-
-# Create systemd service file
+EOF"
+sudo chown kafka:kafka /opt/kafka/config/kraft/broker.properties
+sudo -u kafka /opt/kafka/bin/kafka-storage.sh format -t $CLUSTER_ID -c /opt/kafka/config/kraft/broker.properties --ignore-formatted
 sudo cat > /etc/systemd/system/kafka.service << 'EOF'
 [Unit]
-Description=Apache Kafka Service
-Documentation=https://kafka.apache.org/documentation/
+Description=Apache Kafka Broker Service
 After=network.target
 After=network-online.target
 Wants=network-online.target
-
 [Service]
 Type=simple
 User=kafka
 Group=kafka
-ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/broker.properties
 ExecStop=/opt/kafka/bin/kafka-server-stop.sh
 Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=kafka
+SyslogIdentifier=kafka-broker
 KillMode=process
 TimeoutStopSec=30
-
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# Enable and start kafka service
 sudo systemctl daemon-reload
 sudo systemctl enable kafka
 sudo systemctl start kafka
-
-# Wait for service to start
 sleep 30
 sudo systemctl status kafka
-`, i, controllerVotersString, i)),
+`, nodeID, controllerVotersString, advertisedListener)),
 				Tags: pulumi.StringMap{
-					"Name": pulumi.String(fmt.Sprintf("kafka-playground-instance-%d", i)),
+					"Name": pulumi.String(instanceName),
 				},
 			})
 			if err != nil {
 				return err
 			}
 
-			_, err = route53.NewRecord(ctx, fmt.Sprintf("kafka-playground-record-%d", i), &route53.RecordArgs{
+			_, err = route53.NewRecord(ctx, fmt.Sprintf("kafka-playground-broker-record-%d", i), &route53.RecordArgs{
 				ZoneId: hostedZone.ID(),
 				Name: instance.Tags.ApplyT(func(tags map[string]string) (string, error) {
 					return fmt.Sprintf("%s.kafka.internal", tags["Name"]), nil
